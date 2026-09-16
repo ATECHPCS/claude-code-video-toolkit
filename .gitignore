@@ -105,3 +105,6 @@ examples/*/chart_anim.mp4
 playwright/output/*.mp4
 playwright/recordings/*.mp4
 .ai_dev/
+
+# Local TTS voice references + portraits (do not publish; fork is public)
+voices/

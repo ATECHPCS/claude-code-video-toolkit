@@ -119,11 +119,41 @@ def _upload_to_litterbox(file_path: str, file_name: str) -> str | None:
     return None
 
 
+def _upload_to_catbox(file_path: str, file_name: str) -> str | None:
+    """Upload to catbox.moe (permanent, 200MB limit) — litterbox's sibling host,
+    same API. Used as a fallback when litterbox (temporary) is offline."""
+    import subprocess
+    # catbox rejects non-browser User-Agents with "Invalid uploader" — send a
+    # standard browser UA so the multipart upload is accepted.
+    result = subprocess.run(
+        [
+            "curl", "-s",
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "-F", "reqtype=fileupload",
+            "-F", f"fileToUpload=@{file_path}",
+            "https://catbox.moe/user/api.php",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode == 0:
+        url = result.stdout.strip()
+        if url.startswith("http"):
+            return url
+    return None
+
+
 def _upload_to_0x0(file_path: str, file_name: str) -> str | None:
     """Upload to 0x0.st (512MB limit, 30 day retention)."""
     import subprocess
+    # 0x0.st rejects requests with a default library User-Agent (curl/…) — it
+    # requires a descriptive UA or the upload returns an error page, not a URL.
     result = subprocess.run(
-        ["curl", "-s", "-F", f"file=@{file_path}", "https://0x0.st"],
+        ["curl", "-s",
+         "-A", "claude-code-video-toolkit/1.0 (voice reference upload)",
+         "-F", f"file=@{file_path}", "https://0x0.st"],
         capture_output=True,
         text=True,
         timeout=300,
@@ -147,13 +177,22 @@ def upload_to_storage(file_path: str, prefix: str) -> tuple[str | None, str | No
 
     print(f"Uploading {file_name} ({file_size // 1024}KB)...", file=sys.stderr)
 
+    # Pre-hosted reference override: when the flaky free relays are down, callers
+    # can host the (static) reference audio themselves and pass its URL, skipping
+    # the upload entirely. Gated to the TTS reference prefix so other transfers
+    # are unaffected.
+    override = os.environ.get("TOOLKIT_REF_URL")
+    if override and prefix == "qwen3-tts/input":
+        print(f"  Using pre-hosted reference (TOOLKIT_REF_URL)", file=sys.stderr)
+        return override, None
+
     url, r2_key = upload_to_r2(file_path, prefix)
     if url:
         print(f"  Upload complete (R2)", file=sys.stderr)
         return url, r2_key
 
     # Fall back to free services
-    for service_name, upload_func in [("litterbox", _upload_to_litterbox), ("0x0.st", _upload_to_0x0)]:
+    for service_name, upload_func in [("litterbox", _upload_to_litterbox), ("catbox", _upload_to_catbox), ("0x0.st", _upload_to_0x0)]:
         try:
             url = upload_func(file_path, file_name)
             if url:
